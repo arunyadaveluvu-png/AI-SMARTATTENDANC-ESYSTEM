@@ -109,3 +109,4 @@ ALTER TABLE system_settings ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow all on system_settings" ON system_settings
     FOR ALL USING (true) WITH CHECK (true);
+

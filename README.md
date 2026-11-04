@@ -1,107 +1,65 @@
 # AI Smart Attendance System 🎓
 
-An AI-powered attendance management system using **face recognition** (InsightFace + YOLOv8) with a **Supabase** cloud database backend and **Streamlit** web UI.
+An AI-powered attendance management system using **face recognition** (InsightFace + YOLOv8) with **local JSON database storage** and a **Streamlit** web UI.
 
-## Features
+---
 
-- 👤 **Student & Faculty Registration** — register face profiles via photo upload or live webcam
-- 🤖 **AI Face Recognition** — InsightFace embeddings for accurate multi-face detection
-- 📸 **YOLOv8 Integration** — real-time crowd detection and counting
-- ☁️ **Supabase Cloud DB** — registration data stored as JSON-compatible records
-- 📊 **Attendance Reports** — export to Excel / PDF, session history, analytics
-- 📍 **Location Tracking** — optional geo-location tagging of attendance sessions
-- 🌙 **Dark Executive UI** — polished Streamlit theme
+## 🌟 Features
 
-## Tech Stack
+- 👤 **Student & Faculty Registration** — enroll face profiles using **Live Webcam** or photo upload
+- 🤖 **AI Face Recognition** — InsightFace deep learning facial embeddings
+- 📸 **YOLOv8 Crowd Detection** — real-time classroom person counting & localization
+- 💾 **Pure JSON Storage** — all data saved directly to standard `.json` files (`students.json`, `faculty.json`, etc.)
+- 📊 **Attendance Reports** — download official PDF and Excel reports with one click
+- 📍 **GPS Geo-tagging** — automatically stamps verification coordinates on attendance photos
+- 🌙 **Executive Dark UI** — clean, responsive design
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Streamlit |
-| Face Recognition | InsightFace + ONNX Runtime |
-| Object Detection | YOLOv8 (Ultralytics) |
-| Database | Supabase (PostgreSQL) + SQLite fallback |
-| Export | ReportLab (PDF), OpenPyXL (Excel) |
-| Location | Geopy + streamlit-js-eval |
+---
 
-## Database Schema (Supabase)
+## 🚀 How to Run & Deploy
 
-All registration details are stored in Supabase PostgreSQL tables:
-
-| Table | Purpose |
-|-------|---------|
-| `students` | Student register no, name, department, face embedding (base64) |
-| `faculty` | Faculty username, password, name |
-| `attendance_sessions` | Session metadata (slot, date, location, counts) |
-| `attendance_logs` | Per-student present/absent log per session |
-| `model_training_history` | YOLOv8 training run metrics |
-| `system_settings` | App configuration key-value store |
-
-## Setup
-
-### 1. Create the Supabase Database
-
-1. Go to [supabase.com](https://supabase.com) → open your project → **SQL Editor**
-2. Paste and run the contents of [`supabase_setup.sql`](supabase_setup.sql)
-
-### 2. Configure Credentials
-
-Copy the secrets template and fill in your credentials:
-
-```bash
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-```
-
-Edit `.streamlit/secrets.toml`:
-
-```toml
-[supabase]
-url = "https://<your-project-ref>.supabase.co"
-key = "<your-anon-key>"
-```
-
-### 3. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Run the App
-
+### Option 1: Unified Application (`app.py`) — Recommended
+Contains **both Registration and Attendance** in a single deployed link with clean sidebar portal switching:
 ```bash
 streamlit run app.py
 ```
 
-Default faculty login: `faculty` / `password123`
+### Option 2: Individual Standalone Apps
+If you want to deploy registration and attendance on **separate Streamlit links**:
+- **Registration Only:** `streamlit run registration_app.py`
+- **Attendance Only:** `streamlit run attendance_app.py`
 
-## Deployment (Streamlit Cloud)
+---
 
-1. Push this repo to GitHub
-2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app**
-3. Select this repo, branch `main`, entrypoint `app.py`
-4. In **Advanced settings → Secrets**, paste your `secrets.toml` contents
-5. Deploy!
+## 📷 Webcam Troubleshooting on Streamlit Cloud
 
-> **Note:** The YOLOv8 model (`yolov8n.pt`) is excluded from the repo due to size. The app auto-downloads it via `ultralytics` on first run.
+When deploying on Streamlit Cloud (`share.streamlit.io`):
+1. **Camera Permission:** When you first load the webcam widget, your browser will ask **"Allow site to use your camera?"** — click **Allow**.
+2. **HTTPS Required:** Camera access (`getUserMedia`) is restricted by modern browsers to secure HTTPS connections. Streamlit Cloud is HTTPS by default.
+3. **Fallback:** If camera access is blocked by your browser or device, switch to the **"Upload Photo"** option to upload a clear face image.
 
-## Project Structure
+---
 
-```
-├── app.py                  # Main Streamlit app (attendance + analytics)
-├── attendance_app.py       # Attendance session runner
-├── registration_app.py     # Student & faculty registration
-├── database.py             # Supabase + SQLite database layer
-├── face_utils.py           # InsightFace embedding extraction
-├── yolo_workflow.py        # YOLOv8 detection workflow
-├── export_utils.py         # PDF / Excel export
-├── location_utils.py       # Geolocation utilities
-├── migrate_to_supabase.py  # One-time local → Supabase migration
-├── supabase_setup.sql      # SQL to create all Supabase tables
-├── requirements.txt        # Python dependencies
-└── .streamlit/
-    ├── config.toml         # Streamlit theme & server config
-    └── secrets.toml.example
-```
+## 💾 JSON Database Format
 
-## License
+No external database server or Supabase setup is required. All records are stored locally as JSON:
 
-MIT
+| JSON File | Content |
+|-----------|---------|
+| `students.json` | Register number, full name, department, base64 face embedding |
+| `faculty.json` | Faculty usernames, credentials, and names |
+| `attendance_sessions.json` | Session metadata, slot name, timestamp, present count, GPS coords |
+| `attendance_logs.json` | Detailed per-student attendance status for each session |
+| `model_training_history.json` | Training metrics and run logs |
+
+*Default Faculty Login:* `faculty` / `password123`
+
+---
+
+## 🛠 Tech Stack
+
+- **UI Framework:** Streamlit
+- **Face Embedding:** InsightFace (ONNX Runtime)
+- **Object / Person Detection:** Ultralytics YOLOv8
+- **Data Storage:** Python JSON file engine
+- **Reporting:** ReportLab (PDF), OpenPyXL (Excel)

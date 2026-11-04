@@ -287,16 +287,18 @@ else:
             if raw_files:
                 uploaded_files = raw_files[:10]
         else:
-            c_cnt = len(st.session_state["cam_snapshots_list"])
+            st.info("💡 **Webcam Tip:** Point camera at the classroom and take snapshots. Make sure your browser grants camera permission.")
             c_col1, c_col2 = st.columns([3, 1])
             with c_col1:
-                cam_snap = st.camera_input(f"Take Snapshot #{c_cnt + 1}" if c_cnt < 10 else "Max 10 Snapshots Captured", key="att_cam_input")
-                if cam_snap is not None and c_cnt < 10:
-                    if not st.session_state["cam_snapshots_list"] or st.session_state["cam_snapshots_list"][-1].getvalue() != cam_snap.getvalue():
-                        st.session_state["cam_snapshots_list"].append(cam_snap)
-                        st.rerun()
+                cam_snap = st.camera_input("Classroom Live Camera", key="att_cam_stream_widget")
+                if cam_snap is not None:
+                    bytes_val = cam_snap.getvalue()
+                    if not any(s.getvalue() == bytes_val for s in st.session_state["cam_snapshots_list"]):
+                        if len(st.session_state["cam_snapshots_list"]) < 10:
+                            st.session_state["cam_snapshots_list"].append(cam_snap)
+                            st.success(f"Snapshot #{len(st.session_state['cam_snapshots_list'])} recorded!")
             with c_col2:
-                st.metric("Captured Snapshots", f"{c_cnt} / 10")
+                st.metric("Captured Snapshots", f"{len(st.session_state['cam_snapshots_list'])} / 10")
                 if st.session_state["cam_snapshots_list"]:
                     if st.button("Clear Snapshots", use_container_width=True, key="att_clear_snaps"):
                         st.session_state["cam_snapshots_list"] = []
