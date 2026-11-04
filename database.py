@@ -11,6 +11,17 @@ except ImportError:
     st = None
 
 DB_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# On read-only filesystems (Streamlit Cloud mounts app dir as read-only),
+# fall back to /tmp which is always writable.
+_write_probe = os.path.join(DB_DIR, ".write_test")
+try:
+    with open(_write_probe, "w") as _f:
+        _f.write("ok")
+    os.remove(_write_probe)
+except (PermissionError, OSError):
+    DB_DIR = "/tmp"
+
 DB_NAME = os.path.join(DB_DIR, "attendance_system.db")
 
 DEFAULT_SUPABASE_URL = "https://oittgqjtssnutcrrnjqt.supabase.co"
