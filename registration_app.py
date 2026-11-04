@@ -210,6 +210,31 @@ with tab1:
         else:
             st.info("No students enrolled yet.")
 
+        # Main Page Cross-Website Sync Box
+        st.markdown("---")
+        st.markdown("### 🔄 Sync to Attendance Portal")
+        st.info("Click below to download the `students.json` file. Then upload it on your Attendance website to sync your registered students!")
+        st.download_button(
+            "📥 Download students.json (Sync File)",
+            data=database.export_students_json_bytes(),
+            file_name="students.json",
+            mime="application/json",
+            use_container_width=True,
+            type="primary",
+            key="main_reg_dl_students_json"
+        )
+
+        with st.expander("📤 Import / Restore students.json", expanded=False):
+            up_sync_main = st.file_uploader("Upload students.json to restore/merge", type=["json"], key="main_reg_sync_json_up")
+            if up_sync_main is not None:
+                file_bytes = up_sync_main.getvalue()
+                file_hash = hash(file_bytes)
+                if st.session_state.get("main_reg_last_synced_hash") != file_hash:
+                    added, updated = database.import_students_json_bytes(file_bytes)
+                    st.session_state["main_reg_last_synced_hash"] = file_hash
+                    st.success(f"✅ Synced! Added {added}, Updated {updated}.")
+                    st.rerun()
+
 # ==============================================================================
 # TAB 2: FACULTY REGISTRATION
 # ==============================================================================

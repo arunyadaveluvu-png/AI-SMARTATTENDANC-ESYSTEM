@@ -288,6 +288,19 @@ if active_portal == "👤 Portal 1: Registration":
             else:
                 st.info("No students enrolled yet. Use the form to enroll your first student.")
 
+            st.markdown("---")
+            st.markdown("### 🔄 Cross-Website Sync")
+            st.caption("Download students JSON to transfer to an external attendance website:")
+            st.download_button(
+                "📥 Download students.json",
+                data=database.export_students_json_bytes(),
+                file_name="students.json",
+                mime="application/json",
+                use_container_width=True,
+                type="primary",
+                key="main_app_dl_students_json"
+            )
+
     with tab_fac:
         fcol1, fcol2 = st.columns([1.2, 1], gap="large")
         with fcol1:

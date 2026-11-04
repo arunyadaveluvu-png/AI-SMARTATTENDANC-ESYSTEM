@@ -293,7 +293,33 @@ else:
     with tab_att_capture:
         st.subheader("Classroom Attendance Photo Capture & Automated Processing")
         st.markdown("Upload classroom group photos or take camera snapshots to process attendance with **YOLO deep-learning** detection.")
-        
+
+        # Cross-Website Sync Box directly on the main page
+        with st.expander("🔄 Sync Students from Registration Website", expanded=(len(database.get_all_students()) == 0)):
+            st.info("💡 **Cross-Website Sync:** Download `students.json` from your Registration website, then upload it below:")
+            sync_c1, sync_c2 = st.columns([2, 1])
+            with sync_c1:
+                up_main_sync = st.file_uploader("Upload students.json from Registration website", type=["json"], key="tab1_main_sync_up")
+                if up_main_sync is not None:
+                    fb = up_main_sync.getvalue()
+                    fh = hash(fb)
+                    if st.session_state.get("tab1_last_hash") != fh:
+                        added, updated = database.import_students_json_bytes(fb)
+                        st.session_state["tab1_last_hash"] = fh
+                        st.success(f"✅ Synced! Loaded {added + updated} student profile(s).")
+                        st.rerun()
+            with sync_c2:
+                curr_cnt = len(database.get_all_students())
+                st.metric("Loaded Students", curr_cnt)
+                st.download_button(
+                    "📥 Backup students.json",
+                    data=database.export_students_json_bytes(),
+                    file_name="students.json",
+                    mime="application/json",
+                    use_container_width=True,
+                    key="tab1_dl_backup"
+                )
+
         slot_name = st.text_input("Class / Session / Slot Name *", value="Slot A - Morning Class", key="att_slot_name")
         confidence_threshold = DEFAULT_CONFIDENCE_THRESHOLD
 
