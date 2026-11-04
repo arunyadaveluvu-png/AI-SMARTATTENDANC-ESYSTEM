@@ -98,9 +98,13 @@ with st.sidebar.expander("🔄 Cross-Website Sync", expanded=True):
     )
     up_sync = st.file_uploader("Upload students.json", type=["json"], key="reg_sync_json_up")
     if up_sync is not None:
-        added, updated = database.import_students_json_bytes(up_sync.getvalue())
-        st.success(f"Synced! Added {added}, Updated {updated}.")
-        st.rerun()
+        file_bytes = up_sync.getvalue()
+        file_hash = hash(file_bytes)
+        if st.session_state.get("reg_last_synced_hash") != file_hash:
+            added, updated = database.import_students_json_bytes(file_bytes)
+            st.session_state["reg_last_synced_hash"] = file_hash
+            st.success(f"✅ Synced! Added {added}, Updated {updated}.")
+            st.rerun()
 
 st.markdown('<div class="main-header">Student & Faculty Registration Portal</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Enroll student facial biometric profiles and manage faculty credentials</div>', unsafe_allow_html=True)

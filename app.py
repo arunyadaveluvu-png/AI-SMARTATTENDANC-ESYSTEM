@@ -178,9 +178,13 @@ with st.sidebar.expander("🔄 JSON Sync / Backup", expanded=False):
     )
     up_sync = st.file_uploader("Upload students.json", type=["json"], key="app_sync_json_up")
     if up_sync is not None:
-        added, updated = database.import_students_json_bytes(up_sync.getvalue())
-        st.success(f"Synced! Added {added}, Updated {updated}.")
-        st.rerun()
+        file_bytes = up_sync.getvalue()
+        file_hash = hash(file_bytes)
+        if st.session_state.get("app_last_synced_hash") != file_hash:
+            added, updated = database.import_students_json_bytes(file_bytes)
+            st.session_state["app_last_synced_hash"] = file_hash
+            st.success(f"Synced! Added {added}, Updated {updated}.")
+            st.rerun()
 
 # ==============================================================================
 # PORTAL 1: REGISTRATION PORTAL
