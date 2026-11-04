@@ -7,6 +7,7 @@ import datetime
 import calendar
 import os
 import json
+from typing import Optional
 
 import database
 import importlib
@@ -190,11 +191,22 @@ st.sidebar.info(
     "Shared Central Database for Student Profiles, Attendance Logs, and Deep Learning Metrics."
 )
 
-def load_image_as_bgr(uploaded_file) -> np.ndarray:
-    bytes_data = uploaded_file.getvalue()
-    file_bytes = np.asarray(bytearray(bytes_data), dtype=np.uint8)
-    img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-    return img_bgr
+from PIL import Image
+
+def load_image_as_bgr(uploaded_file) -> Optional[np.ndarray]:
+    if uploaded_file is None:
+        return None
+    try:
+        img = Image.open(uploaded_file).convert("RGB")
+        rgb = np.array(img)
+        return rgb[:, :, ::-1]  # RGB to BGR
+    except Exception:
+        try:
+            bytes_data = uploaded_file.getvalue()
+            file_bytes = np.asarray(bytearray(bytes_data), dtype=np.uint8)
+            return cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        except Exception:
+            return None
 
 # ==============================================================================
 # FACULTY AUTHENTICATION SCREEN

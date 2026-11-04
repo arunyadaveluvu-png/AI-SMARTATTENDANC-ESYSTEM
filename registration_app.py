@@ -2,6 +2,7 @@ import streamlit as st
 import cv2
 import numpy as np
 import pandas as pd
+from typing import Optional
 
 import database
 import face_utils
@@ -87,12 +88,22 @@ st.markdown('<div class="sub-header">Enroll student facial biometric profiles an
 
 tab1, tab2 = st.tabs(["Student Face Registration", "Faculty Account Registration"])
 
-def load_image_as_bgr(uploaded_file) -> np.ndarray:
+from PIL import Image
+
+def load_image_as_bgr(uploaded_file) -> Optional[np.ndarray]:
     if uploaded_file is None:
         return None
-    bytes_data = uploaded_file.getvalue()
-    file_bytes = np.asarray(bytearray(bytes_data), dtype=np.uint8)
-    return cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    try:
+        img = Image.open(uploaded_file).convert("RGB")
+        rgb = np.array(img)
+        return rgb[:, :, ::-1]  # RGB to BGR
+    except Exception:
+        try:
+            bytes_data = uploaded_file.getvalue()
+            file_bytes = np.asarray(bytearray(bytes_data), dtype=np.uint8)
+            return cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        except Exception:
+            return None
 
 # ==============================================================================
 # TAB 1: STUDENT REGISTRATION

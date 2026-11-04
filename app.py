@@ -7,6 +7,7 @@ import datetime
 import calendar
 import os
 import json
+from typing import Optional
 
 import database
 import face_utils
@@ -116,12 +117,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+from PIL import Image
+
 # Helper function
-def load_image_as_bgr(uploaded_file) -> np.ndarray:
+def load_image_as_bgr(uploaded_file) -> Optional[np.ndarray]:
     if uploaded_file is None:
         return None
-    file_bytes = np.asarray(bytearray(uploaded_file.getvalue()), dtype=np.uint8)
-    return cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    try:
+        img = Image.open(uploaded_file).convert("RGB")
+        rgb = np.array(img)
+        return rgb[:, :, ::-1]  # RGB to BGR
+    except Exception:
+        try:
+            file_bytes = np.asarray(bytearray(uploaded_file.getvalue()), dtype=np.uint8)
+            return cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        except Exception:
+            return None
 
 # Session state initialization
 if "faculty_logged_in" not in st.session_state:
