@@ -104,8 +104,8 @@ database.init_db()
 # Sidebar Info
 st.sidebar.title("Registration System")
 st.sidebar.info(
-    "Cloud Database Connected (Supabase)\n\n"
-    "All registered profiles are saved directly to Supabase Cloud Database."
+    "Local JSON Storage\n\n"
+    "All registered profiles are saved to .local/ JSON files."
 )
 
 st.markdown('<div class="main-header">Student & Faculty Registration</div>', unsafe_allow_html=True)

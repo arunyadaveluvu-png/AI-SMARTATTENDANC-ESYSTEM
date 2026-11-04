@@ -10,7 +10,10 @@ env/
 .DS_Store
 *.log
 
-# Local SQLite database (use Supabase in production)
+# Local JSON data store (contains face embeddings — keep private)
+.local/
+
+# Local SQLite database
 *.db
 
 # Large model weights — download separately or use pre-trained
