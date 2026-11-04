@@ -11,6 +11,10 @@ import importlib
 importlib.reload(database)
 import face_utils
 import export_utils
+import yolo_workflow
+import location_utils
+import os
+import json
 
 # Page Config
 st.set_page_config(
@@ -493,11 +497,12 @@ else:
 
         st.markdown("---")
         
-        att_tab1, att_tab2, att_tab3, att_tab4 = st.tabs([
+        att_tab1, att_tab2, att_tab3, att_tab4, att_tab5 = st.tabs([
             "Capture Attendance",
             "Edit Attendance",
             "All-Time Attendance History",
-            "Manage Registered Students"
+            "Manage Registered Students",
+            "YOLO Deep-Learning Studio"
         ])
 
         # TAB 1: CAPTURE ATTENDANCE ONLY
@@ -505,6 +510,16 @@ else:
             st.subheader("Classroom Attendance Photo Capture & Processing")
             slot_name = st.text_input("Class / Session / Slot Name *", value="Slot A - Morning Class", key="app_slot_name")
             confidence_threshold = 0.50
+
+            # Automated YOLO Deep-Learning Detection Engine (Settings hidden from UI per user configuration)
+            app_yolo_model = "yolov8n.pt"
+            app_yolo_conf = 0.25
+            app_use_yolo = True
+
+            # Geolocation Verification UI
+            st.markdown("---")
+            location_data = location_utils.render_gps_permission_ui(key_prefix="app_flow")
+            st.markdown("---")
 
             input_source = st.radio("Choose Input Method:", ["Upload Classroom Photo(s) (1 to 10)", "Live Camera Multi-Snapshot (Capture up to 10)"], horizontal=True, key="app_att_input_src")
             
@@ -530,22 +545,56 @@ else:
                             st.rerun()
                 uploaded_files = st.session_state["cam_snapshots_list"]
 
+            # Display Preview with GPS watermark visibly stamped on the photo
             if uploaded_files:
+                st.markdown("#### Classroom Photos Preview & GPS Watermarked Frames")
+                prev_cols = st.columns(min(len(uploaded_files), 4))
+                for idx, f in enumerate(uploaded_files):
+                    with prev_cols[idx % len(prev_cols)]:
+                        f_bgr = load_image_as_bgr(f)
+                        if f_bgr is not None:
+                            stamped_preview_bgr = location_utils.stamp_gps_on_image(
+                                image_bgr=f_bgr,
+                                location_data=location_data,
+                                slot_name=slot_name.strip(),
+                                timestamp_str=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            )
+                            stamped_preview_rgb = cv2.cvtColor(stamped_preview_bgr, cv2.COLOR_BGR2RGB)
+                            st.image(stamped_preview_rgb, caption=f"Classroom Photo #{idx + 1} (GPS Watermarked)", use_container_width=True)
+                        else:
+                            st.image(f, caption=f"Classroom Frame #{idx + 1}", use_container_width=True)
+
                 if st.button(f"Process Attendance Across {len(uploaded_files)} Photo(s)", use_container_width=True, type="primary", key="app_btn_proc"):
                     registered_students = database.get_all_students()
                     if len(registered_students) == 0:
                         st.warning("No students registered in database!")
                     else:
-                        with st.spinner(f"Analyzing {len(uploaded_files)} classroom photo(s)..."):
+                        with st.spinner(f"Running YOLO deep-learning detection and facial matching across {len(uploaded_files)} photo(s)..."):
                             union_present_regs = set()
                             annotated_images = []
                             total_faces_detected_count = 0
+                            total_yolo_persons_count = 0
+                            yolo_speed_list = []
+                            now_capture_ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             
                             for img_file in uploaded_files:
                                 img_bgr = load_image_as_bgr(img_file)
                                 if img_bgr is not None:
-                                    annotated_bgr, records, metrics = face_utils.recognize_faces_in_group(img_bgr, registered_students, threshold=confidence_threshold)
+                                    annotated_bgr, records, metrics = face_utils.recognize_faces_in_group(
+                                        group_image_bgr=img_bgr,
+                                        registered_students=registered_students,
+                                        threshold=confidence_threshold,
+                                        yolo_model_name=app_yolo_model,
+                                        yolo_conf_threshold=app_yolo_conf,
+                                        use_yolo=app_use_yolo,
+                                        location_data=location_data,
+                                        slot_name=slot_name.strip(),
+                                        timestamp_str=now_capture_ts
+                                    )
                                     total_faces_detected_count += metrics.get("total_detected", 0)
+                                    total_yolo_persons_count += metrics.get("yolo_persons_detected", 0)
+                                    yolo_speed_list.append(metrics.get("yolo_speed", {}))
+                                    
                                     annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
                                     annotated_images.append(annotated_rgb)
                                     for r in records:
@@ -553,6 +602,7 @@ else:
                                             union_present_regs.add(r["Register No"])
                             
                             combined_records = []
+
                             for s in registered_students:
                                 reg = s["register_no"]
                                 is_present = reg in union_present_regs
@@ -567,9 +617,19 @@ else:
                             p_count = len(union_present_regs)
                             a_count = len(registered_students) - p_count
                             
+                            avg_inference_ms = 0.0
+                            if yolo_speed_list:
+                                inf_times = [s.get("inference_ms", 0.0) for s in yolo_speed_list if "inference_ms" in s]
+                                if inf_times:
+                                    avg_inference_ms = round(float(np.mean(inf_times)), 1)
+
                             now_dt = datetime.datetime.now()
                             date_str = now_dt.strftime("%Y-%m-%d")
                             time_str = now_dt.strftime("%H:%M:%S")
+
+                            loc_lat = location_data.get("latitude") if location_data else None
+                            loc_lon = location_data.get("longitude") if location_data else None
+                            loc_addr = location_data.get("address") if location_data else None
 
                             database.save_attendance_session(
                                 slot_name=slot_name.strip(),
@@ -579,7 +639,12 @@ else:
                                 total_students=len(registered_students),
                                 present_count=p_count,
                                 absent_count=a_count,
-                                records=combined_records
+                                records=combined_records,
+                                location_lat=loc_lat,
+                                location_lon=loc_lon,
+                                location_address=loc_addr,
+                                yolo_model_name=app_yolo_model if app_use_yolo else "InsightFace Only",
+                                detection_count=total_yolo_persons_count
                             )
 
                             st.session_state["last_annotated_imgs"] = annotated_images
@@ -587,8 +652,14 @@ else:
                             st.session_state["last_metrics"] = {
                                 "total_registered": len(registered_students),
                                 "total_detected": total_faces_detected_count,
+                                "yolo_persons": total_yolo_persons_count,
                                 "present": p_count,
-                                "absent": a_count
+                                "absent": a_count,
+                                "yolo_model": app_yolo_model if app_use_yolo else "InsightFace Only",
+                                "yolo_inference_ms": avg_inference_ms,
+                                "location_lat": loc_lat,
+                                "location_lon": loc_lon,
+                                "location_address": loc_addr
                             }
                             st.session_state["last_slot_name"] = slot_name.strip()
                             st.session_state["last_process_date"] = date_str
@@ -601,8 +672,7 @@ else:
                 st.subheader("Attendance Processing Results Summary")
                 metrics = st.session_state.get("last_metrics", {})
                 records = st.session_state.get("last_attendance_records", [])
-                if metrics and records:
-                    present_df = pd.DataFrame([r for r in records if r["Status"] == "Present"])
+                present_df = pd.DataFrame([r for r in records if r["Status"] == "Present"]) if records else pd.DataFrame()
 
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Registered Students", metrics["total_registered"])
@@ -610,16 +680,34 @@ else:
                 m3.metric("Present Count", metrics["present"], delta=f"{(metrics['present']/max(metrics['total_registered'],1))*100:.1f}%")
                 m4.metric("Absent Count", metrics["absent"])
 
+                # Deep Learning Telemetry Row
+                st.markdown("#### 🤖 Deep-Learning Inference & Location Telemetry")
+                dl1, dl2, dl3, dl4 = st.columns(4)
+                with dl1:
+                    st.metric("YOLO Model", metrics.get("yolo_model", "yolov8n.pt"))
+                with dl2:
+                    st.metric("YOLO Person Detections", metrics.get("yolo_persons", 0))
+                with dl3:
+                    st.metric("Inference Latency", f"{metrics.get('yolo_inference_ms', 0.0)} ms")
+                with dl4:
+                    loc_val = "Not Tagged"
+                    if metrics.get("location_lat") is not None and metrics.get("location_lon") is not None:
+                        loc_val = f"{metrics['location_lat']:.4f}, {metrics['location_lon']:.4f}"
+                    st.metric("GPS Location", loc_val)
+
+                if metrics.get("location_address"):
+                    st.caption(f"📍 **Verified Location:** {metrics['location_address']}")
+
                 if "last_annotated_imgs" in st.session_state and st.session_state["last_annotated_imgs"]:
                     st.markdown("### Visual Recognition Output")
                     imgs = st.session_state["last_annotated_imgs"]
                     if len(imgs) == 1:
-                        st.image(imgs[0], caption="Green Bounding Box = Matched Student | Red = Unknown", use_container_width=True)
+                        st.image(imgs[0], caption="Green = Matched Student | Red = Unknown Face | Cyan = YOLO Detected Person", use_container_width=True)
                     else:
                         cols = st.columns(min(len(imgs), 3))
                         for idx, img in enumerate(imgs):
                             with cols[idx % len(cols)]:
-                                st.image(img, caption=f"Photo #{idx+1}", use_container_width=True)
+                                st.image(img, caption=f"Classroom Frame #{idx+1}", use_container_width=True)
 
                 st.markdown("### Present Students Identified")
                 if not present_df.empty:
@@ -730,6 +818,15 @@ else:
                 a_cnt = len(absent_records)
                 tot_cnt = len(records)
 
+                last_m = st.session_state.get("last_metrics", {})
+                loc_str = "Not Permitted / Unavailable"
+                if last_m.get("location_lat") is not None and last_m.get("location_lon") is not None:
+                    loc_str = f"{last_m['location_lat']:.5f}, {last_m['location_lon']:.5f}"
+                    if last_m.get("location_address"):
+                        loc_str += f" ({last_m['location_address']})"
+                
+                yolo_mod = last_m.get("yolo_model", "yolov8n.pt")
+
                 excel_bytes = export_utils.create_excel_report(
                     slot_name=cur_slot,
                     faculty_name=faculty_name,
@@ -738,7 +835,9 @@ else:
                     total_strength=tot_cnt,
                     present_count=p_cnt,
                     absent_count=a_cnt,
-                    df_records=pd.DataFrame(records)
+                    df_records=pd.DataFrame(records),
+                    location_str=loc_str,
+                    yolo_model_name=yolo_mod
                 )
 
                 pdf_bytes = export_utils.create_pdf_report(
@@ -750,7 +849,9 @@ else:
                     present_count=p_cnt,
                     absent_count=a_cnt,
                     df_records=pd.DataFrame(records),
-                    annotated_images=st.session_state.get("last_annotated_imgs", [])
+                    annotated_images=st.session_state.get("last_annotated_imgs", []),
+                    location_str=loc_str,
+                    yolo_model_name=yolo_mod
                 )
 
                 date_file_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -808,119 +909,137 @@ else:
                 with col_summary:
                     st.metric("Total Saved Sessions", len(saved_sessions))
 
-                st.markdown("---")
-                st.markdown(f"### Interactive Calendar: {sel_month_name} {sel_year}")
-                st.markdown("Click any active date button to open attendance records for that day.")
+            st.markdown("---")
+            st.markdown(f"### Interactive Calendar: {sel_month_name} {sel_year}")
+            st.markdown("Click any active date button to open attendance records for that day.")
 
-                days_header = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-                hdr_cols = st.columns(7)
-                for idx, day_name in enumerate(days_header):
-                    with hdr_cols[idx]:
-                        st.markdown(f"<div style='text-align:center; font-weight:700; color:#38bdf8; font-size:0.85rem;'>{day_name}</div>", unsafe_allow_html=True)
+            days_header = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            hdr_cols = st.columns(7)
+            for idx, day_name in enumerate(days_header):
+                with hdr_cols[idx]:
+                    st.markdown(f"<div style='text-align:center; font-weight:700; color:#38bdf8; font-size:0.85rem;'>{day_name}</div>", unsafe_allow_html=True)
 
-                month_matrix = calendar.monthcalendar(sel_year, sel_month_num)
+            month_matrix = calendar.monthcalendar(sel_year, sel_month_num)
 
-                for week in month_matrix:
-                    week_cols = st.columns(7)
-                    for day_idx, day_num in enumerate(week):
-                        with week_cols[day_idx]:
-                            if day_num == 0:
-                                st.markdown("<div style='height:44px;'></div>", unsafe_allow_html=True)
-                            else:
-                                date_fmt = f"{sel_year:04d}-{sel_month_num:02d}-{day_num:02d}"
-                                has_recs = date_fmt in sessions_by_date
-                                
-                                if has_recs:
-                                    sess_cnt = len(sessions_by_date[date_fmt])
-                                    lbl = f"{day_num}"
-                                    st.markdown(f"<div style='background:#15803d; border:2px solid #22c55e; border-radius:8px; text-align:center; padding:8px 4px; color:#fff; font-weight:700; font-size:0.95rem; margin-bottom:2px;'>{day_num}<br><span style='font-size:0.65rem; opacity:0.9;'>{sess_cnt} rec</span></div>", unsafe_allow_html=True)
-                                    if st.button("View", key=f"app_cal_btn_{date_fmt}", use_container_width=True):
-                                        st.session_state["app_selected_cal_date"] = date_fmt
-                                        st.rerun()
-                                else:
-                                    st.markdown(f"<div style='background:#7f1d1d; border:2px solid #ef4444; border-radius:8px; text-align:center; padding:8px 4px; color:#fca5a5; font-weight:600; font-size:0.95rem; margin-bottom:2px; opacity:0.7;'>{day_num}</div>", unsafe_allow_html=True)
-
-                st.markdown("---")
-                active_date = st.session_state.get("app_selected_cal_date", None)
-
-                if active_date:
-                    st.markdown(f"### Attendance Records for Date: **{active_date}**")
-                    date_sessions = sessions_by_date.get(active_date, [])
-
-                    if not date_sessions:
-                        st.info(f"No records stored for date {active_date}.")
-                    else:
-                        for s in date_sessions:
-                            s_id = s["id"]
-                            s_title = f"Slot: {s['slot_name']} (Time: {s['time_str']} | Faculty: {s['faculty_name']}) — Present: {s['present_count']}/{s['total_students']}"
+            for week in month_matrix:
+                week_cols = st.columns(7)
+                for day_idx, day_num in enumerate(week):
+                    with week_cols[day_idx]:
+                        if day_num == 0:
+                            st.markdown("<div style='height:44px;'></div>", unsafe_allow_html=True)
+                        else:
+                            date_fmt = f"{sel_year:04d}-{sel_month_num:02d}-{day_num:02d}"
+                            has_recs = date_fmt in sessions_by_date
                             
-                            with st.expander(s_title, expanded=True):
-                                info, logs = database.get_attendance_session_details(s_id)
-                                if info:
-                                    inf_c1, inf_c2, inf_c3, inf_c4 = st.columns(4)
-                                    inf_c1.metric("Date & Time", f"{info['date_str']} {info['time_str']}")
-                                    inf_c2.metric("Total Strength", info['total_students'])
-                                    inf_c3.metric("Present Count", info['present_count'])
-                                    inf_c4.metric("Absent Count", info['absent_count'])
+                            if has_recs:
+                                sess_cnt = len(sessions_by_date[date_fmt])
+                                lbl = f"{day_num}"
+                                st.markdown(f"<div style='background:#15803d; border:2px solid #22c55e; border-radius:8px; text-align:center; padding:8px 4px; color:#fff; font-weight:700; font-size:0.95rem; margin-bottom:2px;'>{day_num}<br><span style='font-size:0.65rem; opacity:0.9;'>{sess_cnt} rec</span></div>", unsafe_allow_html=True)
+                                if st.button("View", key=f"app_cal_btn_{date_fmt}", use_container_width=True):
+                                    st.session_state["app_selected_cal_date"] = date_fmt
+                                    st.rerun()
+                            else:
+                                st.markdown(f"<div style='background:#7f1d1d; border:2px solid #ef4444; border-radius:8px; text-align:center; padding:8px 4px; color:#fca5a5; font-weight:600; font-size:0.95rem; margin-bottom:2px; opacity:0.7;'>{day_num}</div>", unsafe_allow_html=True)
 
-                                    df_logs = pd.DataFrame(logs)
-                                    st.markdown("#### Present Students Roster")
-                                    df_logs_present = df_logs[df_logs["Status"] == "Present"].reset_index(drop=True)
-                                    if not df_logs_present.empty:
-                                        df_logs_present.insert(0, "S.No", range(1, len(df_logs_present) + 1))
-                                        st.dataframe(df_logs_present, use_container_width=True, hide_index=True)
-                                    else:
-                                        st.info("No present students recorded for this session.")
+            st.markdown("---")
+            active_date = st.session_state.get("app_selected_cal_date", None)
 
-                                    h_pdf_bytes = export_utils.create_pdf_report(
-                                        slot_name=info["slot_name"],
-                                        faculty_name=info["faculty_name"],
-                                        date_str=info["date_str"],
-                                        time_str=info["time_str"],
-                                        total_strength=info["total_students"],
-                                        present_count=info["present_count"],
-                                        absent_count=info["absent_count"],
-                                        df_records=df_logs
-                                    )
+            if active_date:
+                st.markdown(f"### Attendance Records for Date: **{active_date}**")
+                date_sessions = sessions_by_date.get(active_date, [])
 
-                                    h_excel_bytes = export_utils.create_excel_report(
-                                        slot_name=info["slot_name"],
-                                        faculty_name=info["faculty_name"],
-                                        date_str=info["date_str"],
-                                        time_str=info["time_str"],
-                                        total_strength=info["total_students"],
-                                        present_count=info["present_count"],
-                                        absent_count=info["absent_count"],
-                                        df_records=df_logs
-                                    )
-
-                                    h_col1, h_col2, h_col3 = st.columns([2, 2, 1])
-                                    with h_col1:
-                                        st.download_button(
-                                            label=f"Download PDF Report ({info['date_str']})",
-                                            data=h_pdf_bytes,
-                                            file_name=f"Attendance_{info['date_str']}_{s_id}.pdf",
-                                            mime="application/pdf",
-                                            use_container_width=True,
-                                            key=f"app_cal_pdf_{s_id}"
-                                        )
-                                    with h_col2:
-                                        st.download_button(
-                                            label=f"Download Excel Sheet ({info['date_str']})",
-                                            data=h_excel_bytes,
-                                            file_name=f"Attendance_{info['date_str']}_{s_id}.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            use_container_width=True,
-                                            key=f"app_cal_excel_{s_id}"
-                                        )
-                                    with h_col3:
-                                        if st.button("Delete Session", key=f"app_cal_del_{s_id}", use_container_width=True):
-                                            database.delete_attendance_session(s_id)
-                                            st.session_state["app_selected_cal_date"] = None
-                                            st.success("Session record deleted successfully.")
-                                            st.rerun()
+                if not date_sessions:
+                    st.info(f"No records stored for date {active_date}.")
                 else:
-                    st.info("Click on any active date in the calendar above to view detailed attendance logs and export PDF/Excel reports.")
+                    for s in date_sessions:
+                        s_id = s["id"]
+                        s_title = f"Slot: {s['slot_name']} (Time: {s['time_str']} | Faculty: {s['faculty_name']}) — Present: {s['present_count']}/{s['total_students']}"
+                        
+                        with st.expander(s_title, expanded=True):
+                            info, logs = database.get_attendance_session_details(s_id)
+                            if info:
+                                inf_c1, inf_c2, inf_c3, inf_c4 = st.columns(4)
+                                inf_c1.metric("Date & Time", f"{info['date_str']} {info['time_str']}")
+                                inf_c2.metric("Total Strength", info['total_students'])
+                                inf_c3.metric("Present Count", info['present_count'])
+                                inf_c4.metric("Absent Count", info['absent_count'])
+
+                                loc_lat = info.get("location_lat")
+                                loc_lon = info.get("location_lon")
+                                if loc_lat is not None and loc_lon is not None:
+                                    addr_info = info.get("location_address") or "Coordinates recorded"
+                                    st.info(f"📍 **Verified GPS Coordinates:** `{loc_lat:.5f}° N, {loc_lon:.5f}° E` — {addr_info}")
+                                else:
+                                    st.caption("📍 GPS Location: Not Recorded (Access Denied or Offline)")
+
+                                y_mod = info.get("yolo_model_name")
+                                if y_mod:
+                                    det_c = info.get("detection_count", 0)
+                                    st.caption(f"🤖 **Detection Model:** {y_mod} | Detections: {det_c}")
+
+                                df_logs = pd.DataFrame(logs)
+                                st.markdown("#### Present Students Roster")
+                                df_logs_present = df_logs[df_logs["Status"] == "Present"].reset_index(drop=True)
+                                if not df_logs_present.empty:
+                                    df_logs_present.insert(0, "S.No", range(1, len(df_logs_present) + 1))
+                                    st.dataframe(df_logs_present, use_container_width=True, hide_index=True)
+                                else:
+                                    st.info("No present students recorded for this session.")
+
+                                hist_loc_str = f"{loc_lat:.5f}, {loc_lon:.5f}" if (loc_lat and loc_lon) else "Not Recorded"
+                                h_pdf_bytes = export_utils.create_pdf_report(
+                                    slot_name=info["slot_name"],
+                                    faculty_name=info["faculty_name"],
+                                    date_str=info["date_str"],
+                                    time_str=info["time_str"],
+                                    total_strength=info["total_students"],
+                                    present_count=info["present_count"],
+                                    absent_count=info["absent_count"],
+                                    df_records=df_logs,
+                                    location_str=hist_loc_str,
+                                    yolo_model_name=y_mod
+                                )
+
+                                h_excel_bytes = export_utils.create_excel_report(
+                                    slot_name=info["slot_name"],
+                                    faculty_name=info["faculty_name"],
+                                    date_str=info["date_str"],
+                                    time_str=info["time_str"],
+                                    total_strength=info["total_students"],
+                                    present_count=info["present_count"],
+                                    absent_count=info["absent_count"],
+                                    df_records=df_logs,
+                                    location_str=hist_loc_str,
+                                    yolo_model_name=y_mod
+                                )
+
+                                h_col1, h_col2, h_col3 = st.columns([2, 2, 1])
+                                with h_col1:
+                                    st.download_button(
+                                        label=f"Download PDF Report ({info['date_str']})",
+                                        data=h_pdf_bytes,
+                                        file_name=f"Attendance_{info['date_str']}_{s_id}.pdf",
+                                        mime="application/pdf",
+                                        use_container_width=True,
+                                        key=f"app_cal_pdf_{s_id}"
+                                    )
+                                with h_col2:
+                                    st.download_button(
+                                        label=f"Download Excel Sheet ({info['date_str']})",
+                                        data=h_excel_bytes,
+                                        file_name=f"Attendance_{info['date_str']}_{s_id}.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        use_container_width=True,
+                                        key=f"app_cal_excel_{s_id}"
+                                    )
+                                with h_col3:
+                                    if st.button("Delete Session", key=f"app_cal_del_{s_id}", use_container_width=True):
+                                        database.delete_attendance_session(s_id)
+                                        st.session_state["app_selected_cal_date"] = None
+                                        st.success("Session record deleted successfully.")
+                                        st.rerun()
+            else:
+                st.info("Click on any active date in the calendar above to view detailed attendance logs and export PDF/Excel reports.")
 
         # TAB 4: MANAGE REGISTERED STUDENTS DIRECTORY
         with att_tab4:
@@ -983,3 +1102,235 @@ else:
                                 st.rerun()
                             else:
                                 st.error("Failed to delete student.")
+
+        # TAB 5: YOLO DEEP-LEARNING STUDIO & MODEL TRAINING
+        with att_tab5:
+            st.subheader("YOLO Deep-Learning Model Studio & Metrics Analytics")
+            st.markdown("Monitor model architecture, inspect genuine loss and evaluation metrics, and run training workflows.")
+
+            # Section 1: Active Specs
+            st.markdown("### 1. Active Deep-Learning Model Specifications")
+            model_info = yolo_workflow.get_yolo_model_info("yolov8n.pt")
+            
+            sp_c1, sp_c2, sp_c3, sp_c4 = st.columns(4)
+            with sp_c1:
+                st.metric("Model Architecture", "YOLOv8 Nano (Ultralytics)")
+            with sp_c2:
+                st.metric("Active Weights", model_info.get("model_name", "yolov8n.pt"))
+            with sp_c3:
+                st.metric("Parameters", model_info.get("parameters", "3.2M"))
+            with sp_c4:
+                st.metric("Compute Device", model_info.get("device", "CPU").upper())
+
+            # Section 2: Metrics Dashboard
+            st.markdown("---")
+            st.markdown("### 2. Deep-Learning Training & Validation Metrics")
+            
+            latest_metrics = yolo_workflow.get_latest_training_metrics()
+            status = latest_metrics.get("status", "UNTRAINED")
+
+            if status == "UNTRAINED":
+                st.warning(
+                    "⚠️ **Status: Baseline Pre-Trained Weights Active (`yolov8n.pt`)**\n\n"
+                    "No custom fine-tuning runs have been performed yet on a local classroom dataset. "
+                    "The metrics below display `N/A` because training loss and mAP are computed during training/validation. "
+                    "To calculate custom metrics for your environment, configure and train a dataset in the training section below."
+                )
+                
+                dm1, dm2, dm3, dm4 = st.columns(4)
+                dm1.metric("Current Epoch", "0 / 0", help="No fine-tuning epochs executed yet.")
+                dm2.metric("Training Loss", "N/A", help="Total training loss (Box + Cls + DFL).")
+                dm3.metric("Precision (B)", "N/A", help="Genuine bounding-box precision.")
+                dm4.metric("Recall (B)", "N/A", help="Genuine bounding-box recall.")
+
+                dm5, dm6, dm7, dm8 = st.columns(4)
+                dm5.metric("mAP50", "N/A", help="Mean Average Precision at IoU=0.50.")
+                dm6.metric("mAP50-95", "N/A", help="Mean Average Precision across IoU 0.50 to 0.95.")
+                dm7.metric("Box Loss", "N/A", help="Bounding box regression loss.")
+                dm8.metric("Training Progress", "0.0%", help="Overall epoch progress.")
+                
+            elif status == "COMPLETED":
+                st.success(
+                    f"✅ **Status: Fine-Tuning Run Completed on {latest_metrics.get('completed_at', 'Recently')}**\n\n"
+                    f"Trained on dataset: `{latest_metrics.get('dataset_name', 'Custom Dataset')}` | "
+                    f"Duration: `{latest_metrics.get('duration_seconds', 'N/A')}s`"
+                )
+                
+                cur_ep = latest_metrics.get("epochs_trained", 0)
+                tot_ep = latest_metrics.get("total_epochs", 0)
+                
+                dm1, dm2, dm3, dm4 = st.columns(4)
+                dm1.metric("Epochs", f"{cur_ep} / {tot_ep}")
+                dm2.metric("Total Loss", f"{latest_metrics.get('total_loss', 'N/A')}")
+                dm3.metric("Precision (B)", f"{latest_metrics.get('precision', 'N/A')}")
+                dm4.metric("Recall (B)", f"{latest_metrics.get('recall', 'N/A')}")
+
+                dm5, dm6, dm7, dm8 = st.columns(4)
+                dm5.metric("mAP50 (B)", f"{latest_metrics.get('map50', 'N/A')}")
+                dm6.metric("mAP50-95 (B)", f"{latest_metrics.get('map50_95', 'N/A')}")
+                dm7.metric("Box Loss", f"{latest_metrics.get('box_loss', 'N/A')}")
+                dm8.metric("Training Progress", f"{latest_metrics.get('progress_pct', 100.0)}%")
+            else:
+                st.info(f"Training status: {status}")
+
+            # Section 3: Training Workflow
+            st.markdown("---")
+            st.markdown("### 3. YOLO Model Training & Fine-Tuning Workflow")
+            st.markdown("Fine-tune YOLO on an annotated classroom dataset. Results are generated from authentic PyTorch execution.")
+
+            t_col1, t_col2 = st.columns([1.5, 1])
+            with t_col1:
+                dataset_yaml_path = st.text_input(
+                    "Dataset Configuration Path (data.yaml) *",
+                    value="yolo_dataset/data.yaml",
+                    key="app_yolo_data_yaml_path",
+                    help="Path to the YOLO-format YAML configuration file pointing to train and val image sets."
+                )
+                
+                hyp_col1, hyp_col2, hyp_col3 = st.columns(3)
+                with hyp_col1:
+                    t_epochs = st.slider("Total Epochs:", min_value=1, max_value=50, value=5, step=1, key="app_yolo_epochs_slider")
+                with hyp_col2:
+                    t_batch = st.select_slider("Batch Size:", options=[2, 4, 8, 16], value=4, key="app_yolo_batch_slider")
+                with hyp_col3:
+                    t_lr = st.selectbox("Initial Learning Rate (lr0):", [0.01, 0.005, 0.001], index=0, key="app_yolo_lr_select")
+
+                action_c1, action_c2 = st.columns(2)
+                with action_c1:
+                    start_train_btn = st.button("🚀 Start YOLO Training Run", use_container_width=True, type="primary", key="app_btn_start_yolo_train")
+                with action_c2:
+                    validate_btn = st.button("📊 Evaluate / Validate Model", use_container_width=True, key="app_btn_validate_yolo")
+
+                if start_train_btn:
+                    if not os.path.exists(dataset_yaml_path):
+                        st.error(
+                            f"❌ **Missing Dataset Configuration:** File `{dataset_yaml_path}` does not exist on disk.\n\n"
+                            "To fine-tune YOLO, an authentic dataset in YOLO format is required. "
+                            "Create a `data.yaml` pointing to your annotated classroom images (`train` and `val` directories) "
+                            "with class labels. The system does not invent artificial training results."
+                        )
+                    else:
+                        st.info(f"Initiating YOLOv8 fine-tuning for {t_epochs} epoch(s)...")
+                        p_bar = st.progress(0, text="Initializing training...")
+                        status_placeholder = st.empty()
+
+                        def live_training_callback(epoch_data):
+                            cur_e = epoch_data.get("epochs_trained", 0)
+                            tot_e = epoch_data.get("total_epochs", t_epochs)
+                            pct = epoch_data.get("progress_pct", 0.0)
+                            p_bar.progress(int(min(pct, 100)), text=f"Epoch {cur_e}/{tot_e} in progress ({pct}%)...")
+                            status_placeholder.markdown(
+                                f"**Epoch:** {cur_e}/{tot_e} | "
+                                f"**Box Loss:** `{epoch_data.get('box_loss')}` | "
+                                f"**Total Loss:** `{epoch_data.get('total_loss')}` | "
+                                f"**mAP50:** `{epoch_data.get('map50')}`"
+                            )
+
+                        with st.spinner("Executing PyTorch training routine..."):
+                            run_result = yolo_workflow.train_yolo_model(
+                                data_yaml_path=dataset_yaml_path,
+                                model_name="yolov8n.pt",
+                                epochs=t_epochs,
+                                batch_size=t_batch,
+                                lr0=t_lr,
+                                progress_callback=live_training_callback
+                            )
+
+                        if run_result.get("success"):
+                            p_bar.progress(100, text="Training completed successfully!")
+                            st.success("YOLO training run completed! Real-time metrics have been updated in the dashboard above.")
+                            m_res = run_result.get("metrics", {})
+                            database.save_model_training_run(
+                                model_name="yolov8n.pt",
+                                dataset_name=os.path.basename(dataset_yaml_path),
+                                epochs_trained=m_res.get("epochs_trained", t_epochs),
+                                total_epochs=t_epochs,
+                                final_loss=m_res.get("total_loss"),
+                                box_loss=m_res.get("box_loss"),
+                                cls_loss=m_res.get("cls_loss"),
+                                dfl_loss=m_res.get("dfl_loss"),
+                                precision_score=m_res.get("precision"),
+                                recall_score=m_res.get("recall"),
+                                map50=m_res.get("map50"),
+                                map50_95=m_res.get("map50_95"),
+                                training_status="COMPLETED",
+                                started_at=m_res.get("started_at"),
+                                completed_at=m_res.get("completed_at"),
+                                notes=f"Trained on {dataset_yaml_path} with batch={t_batch}, lr0={t_lr}"
+                            )
+                            st.rerun()
+                        else:
+                            st.error(f"Training failed: {run_result.get('error')}")
+
+                if validate_btn:
+                    if not os.path.exists(dataset_yaml_path):
+                        st.error(f"Cannot validate: Dataset configuration `{dataset_yaml_path}` not found.")
+                    else:
+                        with st.spinner("Running YOLO validation on test/val split..."):
+                            val_res = yolo_workflow.validate_yolo_model(data_yaml_path=dataset_yaml_path)
+                            if val_res.get("success"):
+                                st.success("Validation completed!")
+                                v1, v2, v3, v4 = st.columns(4)
+                                v1.metric("Val Precision", val_res.get("precision"))
+                                v2.metric("Val Recall", val_res.get("recall"))
+                                v3.metric("Val mAP50", val_res.get("map50"))
+                                v4.metric("Val mAP50-95", val_res.get("map50_95"))
+                            else:
+                                st.error(f"Validation failed: {val_res.get('error')}")
+
+            with t_col2:
+                st.markdown("#### 📁 YOLO Dataset Directory Structure")
+                st.code("""
+# Required layout for data.yaml:
+path: ./yolo_dataset
+train: images/train
+val: images/val
+
+names:
+  0: person
+  1: student_face
+                """, language="yaml")
+                st.caption(
+                    "Each image in `images/` must have a corresponding `.txt` file in `labels/` "
+                    "with lines in format: `<class_id> <x_center> <y_center> <width> <height>` (normalized 0 to 1)."
+                )
+
+            # Section 4: Live YOLO Inference Tester
+            st.markdown("---")
+            st.markdown("### 4. Interactive Live YOLO Inference Diagnostic")
+            st.markdown("Upload any test image to evaluate YOLO object and person detection in real time.")
+            
+            test_img_file = st.file_uploader("Upload Test Photo for YOLO Inference:", type=["jpg", "jpeg", "png"], key="app_yolo_test_up")
+            if test_img_file:
+                t_col_img, t_col_res = st.columns([1.5, 1])
+                test_bgr = load_image_as_bgr(test_img_file)
+                if test_bgr is not None:
+                    with st.spinner("Running YOLO detection..."):
+                        detections, speeds = yolo_workflow.detect_people_yolo(test_bgr, conf_threshold=0.25)
+                        
+                        annotated_test = test_bgr.copy()
+                        for det in detections:
+                            b = det["bbox"]
+                            cv2.rectangle(annotated_test, (b[0], b[1]), (b[2], b[3]), (0, 255, 0), 2)
+                            cv2.putText(
+                                annotated_test,
+                                f"{det['class_name']} [{det['confidence']:.2f}]",
+                                (b[0], max(15, b[1] - 5)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.5,
+                                (0, 255, 0),
+                                1
+                            )
+                        annotated_rgb_test = cv2.cvtColor(annotated_test, cv2.COLOR_BGR2RGB)
+
+                    with t_col_img:
+                        st.image(annotated_rgb_test, caption="YOLO Bounding Box Localization Result", use_container_width=True)
+                    with t_col_res:
+                        st.markdown("#### Detection Metrics")
+                        st.metric("Total Detections", len(detections))
+                        st.metric("Inference Latency", f"{speeds['inference_ms']} ms")
+                        st.metric("Preprocess Latency", f"{speeds['preprocess_ms']} ms")
+                        st.metric("Postprocess Latency", f"{speeds['postprocess_ms']} ms")
+                        st.metric("Total Processing Time", f"{speeds['total_ms']} ms")
+                        if detections:
+                            st.dataframe(pd.DataFrame(detections)[["class_name", "confidence", "bbox"]], use_container_width=True, hide_index=True)

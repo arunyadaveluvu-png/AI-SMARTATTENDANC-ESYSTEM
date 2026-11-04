@@ -9,4 +9,20 @@ ENV/
 env/
 .DS_Store
 *.log
+
+# Local SQLite database (use Supabase in production)
 *.db
+
+# Large model weights — download separately or use pre-trained
+*.pt
+*.onnx
+*.weights
+
+# Streamlit secrets (never commit real credentials)
+.streamlit/secrets.toml
+
+# Results / training artifacts
+results/
+
+# Nested duplicate folder
+deeplearning project/

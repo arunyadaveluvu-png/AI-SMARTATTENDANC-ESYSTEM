@@ -116,9 +116,28 @@ def init_db(db_path: str = DB_NAME) -> None:
             total_students INTEGER NOT NULL,
             present_count INTEGER NOT NULL,
             absent_count INTEGER NOT NULL,
+            location_lat REAL,
+            location_lon REAL,
+            location_address TEXT,
+            yolo_model_name TEXT,
+            detection_count INTEGER,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Automatic schema migration for existing SQLite databases
+    cursor.execute("PRAGMA table_info(attendance_sessions)")
+    existing_cols = [col[1] for col in cursor.fetchall()]
+    if "location_lat" not in existing_cols:
+        cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN location_lat REAL")
+    if "location_lon" not in existing_cols:
+        cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN location_lon REAL")
+    if "location_address" not in existing_cols:
+        cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN location_address TEXT")
+    if "yolo_model_name" not in existing_cols:
+        cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN yolo_model_name TEXT")
+    if "detection_count" not in existing_cols:
+        cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN detection_count INTEGER")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS attendance_logs (
@@ -129,6 +148,35 @@ def init_db(db_path: str = DB_NAME) -> None:
             department TEXT NOT NULL,
             status TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES attendance_sessions (id) ON DELETE CASCADE
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS model_training_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_name TEXT NOT NULL,
+            dataset_name TEXT,
+            epochs_trained INTEGER NOT NULL,
+            total_epochs INTEGER NOT NULL,
+            final_loss REAL,
+            box_loss REAL,
+            cls_loss REAL,
+            dfl_loss REAL,
+            precision_score REAL,
+            recall_score REAL,
+            map50 REAL,
+            map50_95 REAL,
+            training_status TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            notes TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS system_settings (
+            setting_key TEXT PRIMARY KEY,
+            setting_value TEXT NOT NULL
         )
     """)
 
@@ -357,9 +405,14 @@ def save_attendance_session(
     present_count: int,
     absent_count: int,
     records: List[Dict[str, str]],
+    location_lat: Optional[float] = None,
+    location_lon: Optional[float] = None,
+    location_address: Optional[str] = None,
+    yolo_model_name: Optional[str] = None,
+    detection_count: Optional[int] = None,
     db_path: str = DB_NAME
 ) -> int:
-    """Save an attendance session and individual logs."""
+    """Save an attendance session with genuine GPS location and YOLO metrics."""
     url, headers = get_supabase_config()
     if url and headers:
         try:
@@ -370,7 +423,12 @@ def save_attendance_session(
                 "time_str": time_str.strip(),
                 "total_students": total_students,
                 "present_count": present_count,
-                "absent_count": absent_count
+                "absent_count": absent_count,
+                "location_lat": location_lat,
+                "location_lon": location_lon,
+                "location_address": location_address,
+                "yolo_model_name": yolo_model_name,
+                "detection_count": detection_count
             }
             res = requests.post(f"{url}/rest/v1/attendance_sessions", json=payload, headers=headers, timeout=5)
             session_id = 0
@@ -396,9 +454,18 @@ def save_attendance_session(
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            INSERT INTO attendance_sessions (slot_name, faculty_name, date_str, time_str, total_students, present_count, absent_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (slot_name.strip(), faculty_name.strip(), date_str.strip(), time_str.strip(), total_students, present_count, absent_count))
+            INSERT INTO attendance_sessions (
+                slot_name, faculty_name, date_str, time_str, total_students,
+                present_count, absent_count, location_lat, location_lon,
+                location_address, yolo_model_name, detection_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            slot_name.strip(), faculty_name.strip(), date_str.strip(), time_str.strip(),
+            total_students, present_count, absent_count,
+            location_lat, location_lon, location_address,
+            yolo_model_name, detection_count
+        ))
         
         session_id = cursor.lastrowid
         for r in records:
@@ -432,14 +499,17 @@ def get_all_attendance_sessions(faculty_name: Optional[str] = None, db_path: str
     cursor = conn.cursor()
     if faculty_name and faculty_name.strip():
         cursor.execute("""
-            SELECT id, slot_name, faculty_name, date_str, time_str, total_students, present_count, absent_count, created_at
+            SELECT *
             FROM attendance_sessions
             WHERE faculty_name = ?
             ORDER BY id DESC
         """, (faculty_name.strip(),))
     else:
+
+
+        
         cursor.execute("""
-            SELECT id, slot_name, faculty_name, date_str, time_str, total_students, present_count, absent_count, created_at
+            SELECT *
             FROM attendance_sessions
             ORDER BY id DESC
         """)
@@ -557,6 +627,98 @@ def delete_student(register_no: str, db_path: str = DB_NAME) -> bool:
     finally:
         conn.close()
 
+def save_model_training_run(
+    model_name: str,
+    dataset_name: str,
+    epochs_trained: int,
+    total_epochs: int,
+    final_loss: Optional[float] = None,
+    box_loss: Optional[float] = None,
+    cls_loss: Optional[float] = None,
+    dfl_loss: Optional[float] = None,
+    precision_score: Optional[float] = None,
+    recall_score: Optional[float] = None,
+    map50: Optional[float] = None,
+    map50_95: Optional[float] = None,
+    training_status: str = "COMPLETED",
+    started_at: Optional[str] = None,
+    completed_at: Optional[str] = None,
+    notes: Optional[str] = None,
+    db_path: str = DB_NAME
+) -> int:
+    """Record a genuine model training/fine-tuning run into SQLite."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO model_training_history (
+                model_name, dataset_name, epochs_trained, total_epochs,
+                final_loss, box_loss, cls_loss, dfl_loss,
+                precision_score, recall_score, map50, map50_95,
+                training_status, started_at, completed_at, notes
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            model_name, dataset_name, epochs_trained, total_epochs,
+            final_loss, box_loss, cls_loss, dfl_loss,
+            precision_score, recall_score, map50, map50_95,
+            training_status, started_at, completed_at, notes
+        ))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+def get_all_model_training_runs(db_path: str = DB_NAME) -> List[Dict[str, Any]]:
+    """Retrieve all recorded model training runs."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM model_training_history ORDER BY id DESC")
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+def get_latest_model_training_run(db_path: str = DB_NAME) -> Optional[Dict[str, Any]]:
+    """Retrieve the most recent model training run."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM model_training_history ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+def save_setting(key: str, value: str, db_path: str = DB_NAME) -> None:
+    """Save or update a system setting in local database."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO system_settings (setting_key, setting_value)
+            VALUES (?, ?)
+            ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value
+        """, (key, str(value)))
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_setting(key: str, default: Optional[str] = None, db_path: str = DB_NAME) -> Optional[str]:
+    """Retrieve a system setting from local database."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT setting_value FROM system_settings WHERE setting_key = ?", (key,))
+        row = cursor.fetchone()
+        return row[0] if row else default
+    except Exception:
+        return default
+    finally:
+        conn.close()
+
 if __name__ == "__main__":
+    init_db()
     init_db()
     print("Database module executed successfully. Mode:", "Supabase Cloud" if is_cloud_mode() else "Local SQLite")

@@ -16,11 +16,13 @@ def create_pdf_report(
     present_count: int,
     absent_count: int,
     df_records: pd.DataFrame,
-    annotated_images: list = None
+    annotated_images: list = None,
+    location_str: str = None,
+    yolo_model_name: str = None
 ) -> bytes:
     """
     Generate an official attendance PDF report containing ONLY present students
-    with header metadata block (Slot, Faculty Name, Date, Time, Total Strength, Present Count, Absent Count)
+    with header metadata block (Slot, Faculty Name, Date, Time, Total Strength, Present Count, Absent Count, GPS Location, YOLO Model)
     and embedded captured/uploaded photos with bounding box evidence at the bottom.
     """
     buffer = io.BytesIO()
@@ -102,6 +104,12 @@ def create_pdf_report(
     story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor('#0284c7'), spaceAfter=10))
     
     # Metadata Block Table
+    loc_display = location_str if (location_str and location_str.strip()) else "Not Permitted / Unavailable"
+    if yolo_model_name and "yolov8" in yolo_model_name.lower():
+        model_display = f"YOLOv8 ({yolo_model_name})"
+    else:
+        model_display = yolo_model_name if (yolo_model_name and yolo_model_name.strip()) else "YOLOv8 Nano (Default Model)"
+    
     meta_data = [
         [
             Paragraph("<b>Slot / Session:</b>", meta_label_style), Paragraph(slot_name, meta_val_style),
@@ -112,22 +120,28 @@ def create_pdf_report(
             Paragraph("<b>Total Strength:</b>", meta_label_style), Paragraph(str(total_strength), meta_val_style),
             Paragraph("<b>Present Count:</b>", meta_label_style), Paragraph(f"<font color='#15803d'><b>{present_count}</b></font>", meta_val_style),
             Paragraph("<b>Absent Count:</b>", meta_label_style), Paragraph(f"<font color='#b91c1c'><b>{absent_count}</b></font>", meta_val_style)
+        ],
+        [
+            Paragraph("<b>GPS Location:</b>", meta_label_style), Paragraph(loc_display, meta_val_style),
+            Paragraph("<b>AI Model Engine:</b>", meta_label_style), Paragraph(model_display, meta_val_style),
+            Paragraph("", meta_label_style), Paragraph("", meta_val_style)
         ]
     ]
     
-    meta_table = Table(meta_data, colWidths=[90, 95, 95, 95, 75, 70])
+    meta_table = Table(meta_data, colWidths=[90, 110, 95, 115, 60, 50])
     meta_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#f1f5f9')),
         ('BOX', (0,0), (-1,-1), 1, colors.HexColor('#cbd5e1')),
         ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e2e8f0')),
-        ('TOPPADDING', (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+        ('SPAN', (1, 2), (1, 2)), # Location
+        ('TOPPADDING', (0,0), (-1,-1), 4),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
         ('LEFTPADDING', (0,0), (-1,-1), 5),
         ('RIGHTPADDING', (0,0), (-1,-1), 5),
     ]))
     
     story.append(meta_table)
-    story.append(Spacer(1, 12))
+    story.append(Spacer(1, 10))
     
     # Filter ONLY Present Students
     df_present = df_records[df_records["Status"] == "Present"].reset_index(drop=True)
@@ -239,7 +253,8 @@ def create_pdf_report(
                 rl_img = RLImage(img_buf, width=target_w, height=target_h)
                 story.append(rl_img)
                 story.append(Spacer(1, 4))
-                story.append(Paragraph(f"Classroom Photo #{idx + 1} - AI Recognition & Bounding Box Evidence", img_caption_style))
+                gps_caption_suffix = f" | GPS Watermark: {loc_display}" if loc_display else ""
+                story.append(Paragraph(f"Classroom Photo #{idx + 1} - AI Face Recognition & Evidence{gps_caption_suffix}", img_caption_style))
                 story.append(Spacer(1, 10))
             except Exception as ex:
                 pass
@@ -258,13 +273,17 @@ def create_excel_report(
     total_strength: int,
     present_count: int,
     absent_count: int,
-    df_records: pd.DataFrame
+    df_records: pd.DataFrame,
+    location_str: str = None,
+    yolo_model_name: str = None
 ) -> bytes:
     """
     Generate an Excel (.xlsx) file containing ONLY present students
-    with header metadata block (Slot, Faculty Name, Date, Time, Total Strength, Present Count, Absent Count).
+    with header metadata block (Slot, Faculty Name, Date, Time, Total Strength, Present Count, Absent Count, GPS Location, YOLO Model).
     """
     buffer = io.BytesIO()
+    loc_display = location_str if (location_str and location_str.strip()) else "Not Permitted / Unavailable"
+    model_display = yolo_model_name if (yolo_model_name and yolo_model_name.strip()) else "YOLOv8n Deep Learning"
     
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         # Create Summary Metadata Header
@@ -277,6 +296,8 @@ def create_excel_report(
             ["Total Strength", total_strength],
             ["Present Count", present_count],
             ["Absent Count", absent_count],
+            ["GPS Location", loc_display],
+            ["AI Model Engine", model_display],
             ["", ""] # Empty row separator
         ]
         
