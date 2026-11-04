@@ -185,11 +185,28 @@ if "cam_snapshots_list" not in st.session_state:
 # Sidebar Navigation Panel
 st.sidebar.title("Faculty Portal")
 st.sidebar.markdown("**AI Facial Attendance & YOLO Deep-Learning Studio**")
-st.sidebar.markdown("---")
-st.sidebar.info(
-    "Connected Database: SQLite (attendance_system.db)\n\n"
-    "Shared Central Database for Student Profiles, Attendance Logs, and Deep Learning Metrics."
-)
+
+if database.is_supabase_connected():
+    st.sidebar.success("🟢 Cloud Sync: Supabase Active")
+else:
+    st.sidebar.info("💾 Storage: Local JSON")
+
+with st.sidebar.expander("🔄 Cross-Website Student Sync", expanded=True):
+    st.caption("Import registered students from your Registration website:")
+    up_sync = st.file_uploader("Upload students.json", type=["json"], key="att_sync_json_up")
+    if up_sync is not None:
+        added, updated = database.import_students_json_bytes(up_sync.getvalue())
+        st.success(f"Synced! Added {added}, Updated {updated}.")
+        st.rerun()
+
+    st.download_button(
+        "📥 Backup students.json",
+        data=database.export_students_json_bytes(),
+        file_name="students.json",
+        mime="application/json",
+        use_container_width=True,
+        key="att_dl_students_json"
+    )
 
 from PIL import Image
 

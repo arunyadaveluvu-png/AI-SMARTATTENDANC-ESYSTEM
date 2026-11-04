@@ -81,7 +81,26 @@ st.markdown("""
 database.init_db()
 
 st.sidebar.title("Registration Portal")
-st.sidebar.info("Database: Local JSON Storage (`students.json`, `faculty.json`)")
+if database.is_supabase_connected():
+    st.sidebar.success("🟢 Cloud Sync: Supabase Active")
+else:
+    st.sidebar.info("💾 Storage: Local JSON")
+
+with st.sidebar.expander("🔄 Cross-Website Sync", expanded=True):
+    st.caption("Sync enrolled students to your Attendance website:")
+    st.download_button(
+        "📥 Download students.json",
+        data=database.export_students_json_bytes(),
+        file_name="students.json",
+        mime="application/json",
+        use_container_width=True,
+        key="reg_dl_students_json"
+    )
+    up_sync = st.file_uploader("Upload students.json", type=["json"], key="reg_sync_json_up")
+    if up_sync is not None:
+        added, updated = database.import_students_json_bytes(up_sync.getvalue())
+        st.success(f"Synced! Added {added}, Updated {updated}.")
+        st.rerun()
 
 st.markdown('<div class="main-header">Student & Faculty Registration Portal</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Enroll student facial biometric profiles and manage faculty credentials</div>', unsafe_allow_html=True)

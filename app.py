@@ -161,7 +161,26 @@ st_count = len(database.get_all_students())
 sess_count = len(database.get_all_attendance_sessions())
 st.sidebar.metric("Registered Students", st_count)
 st.sidebar.metric("Saved Sessions", sess_count)
-st.sidebar.info("💾 Database: Local JSON Files\n(`students.json`, `attendance_sessions.json`)")
+
+if database.is_supabase_connected():
+    st.sidebar.success("🟢 Cloud Sync: Supabase Active")
+else:
+    st.sidebar.info("💾 Storage: Local JSON")
+
+with st.sidebar.expander("🔄 JSON Sync / Backup", expanded=False):
+    st.download_button(
+        "📥 Export students.json",
+        data=database.export_students_json_bytes(),
+        file_name="students.json",
+        mime="application/json",
+        use_container_width=True,
+        key="app_dl_students_json"
+    )
+    up_sync = st.file_uploader("Upload students.json", type=["json"], key="app_sync_json_up")
+    if up_sync is not None:
+        added, updated = database.import_students_json_bytes(up_sync.getvalue())
+        st.success(f"Synced! Added {added}, Updated {updated}.")
+        st.rerun()
 
 # ==============================================================================
 # PORTAL 1: REGISTRATION PORTAL
